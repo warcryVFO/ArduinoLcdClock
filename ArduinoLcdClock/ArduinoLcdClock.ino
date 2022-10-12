@@ -4,24 +4,34 @@
 #include <DS3232RTC.h>
 #include <LiquidCrystal_I2C.h>
 
+// センサーインスタンス
 Adafruit_BME280 bme280;
 
-DS3232RTC ds3232RTC;
+// RTCインスタンス
+DS3232RTC rtc;
+
+// LCDインスタンス
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// 時刻設定モードカウンタ
+int setRTCCount = 10;
+
+// 直前の日時表示値
 int lastYear = -1;
 int lastMonth = -1;
 int lastDay = -1;
 int lastHour = -1;
 int lastMinute = -1;
 
-LiquidCrystal_I2C lcd(0x27, 16, 2);
-
 void setup() {
+  // センサー初期化
   bme280.begin(0x76);
 
-  ds3232RTC.begin();
-  setTime(23, 20, 0, 10, 10, 2022);
-  ds3232RTC.set(now());
+  // RTC初期化
+  rtc.begin();
+  setSyncProvider(rtc.get);
 
+  // LCD初期化
   lcd.init();
   lcd.backlight();
   lcd.clear();
@@ -37,69 +47,134 @@ void setup() {
   lcd.print("/");
   lcd.setCursor(7, 1);
   lcd.print("/");
+
+  // シリアル通信開始
+  Serial.begin(115200);
 }
 
 void loop() {
+  if (0 < setRTCCount) {
+    if (0 < Serial.available()) {
+      // シリアルモニタからメッセージを受信した場合は時刻設定モードに入る
+      setRTC();
+      setRTCCount = 0;
+    } else {
+      setRTCCount--;
+    }
+  }
+
+  // 時刻設定モードカウンタが0になった場合はシリアル通信を終了する
+  if (0 == setRTCCount) {
+    Serial.end();
+    setRTCCount = -1;
+  }
+
+  // センサー値と時計の更新
   updateBME280();
-  updateDS3232RTC();
+  updateRTC();
+
   delay(1000);
 }
 
-void updateBME280() {
-  char tempString[5];
-  char humString[5];
+void setRTC() {
+  tmElements_t tm;
+  time_t tt;
 
-  dtostrf(bme280.readTemperature(), 4, 1, tempString);
-  dtostrf(bme280.readHumidity(), 4, 1, humString);
+  // シリアルバッファを空にする
+  while (0 < Serial.available()) {
+    Serial.read();
+  }
 
-  lcd.setCursor(11, 0);
-  lcd.print(tempString);
-  lcd.setCursor(11, 1);
-  lcd.print(humString);
+  Serial.println("setRTC: yyyy,m,d,h,m,s");
+
+  // シリアルモニターから設定日時が入力されるまで待つ
+  while (Serial.available() < 14) {
+    delay(100);
+  }
+
+  // 日時を設定する
+  tm.Year = CalendarYrToTm(Serial.parseInt());
+  tm.Month = Serial.parseInt();
+  tm.Day = Serial.parseInt();
+  tm.Hour = Serial.parseInt();
+  tm.Minute = Serial.parseInt();
+  tm.Second = Serial.parseInt();
+  tt = makeTime(tm);
+  rtc.set(tt);
+  setTime(tt);
+
+  Serial.print("Date:");
+  Serial.print(year());
+  Serial.print("/");
+  Serial.print(month());
+  Serial.print("/");
+  Serial.println(day());
+  Serial.print("Time:");
+  Serial.print(hour());
+  Serial.print(":");
+  Serial.print(minute());
+  Serial.print(":");
+  Serial.println(second());
 }
 
-void updateDS3232RTC() {
-  tmElements_t tm;
+void updateBME280() {
   char buffer[5];
 
-  ds3232RTC.read(tm);
+  dtostrf(bme280.readTemperature(), 4, 1, buffer);
+  lcd.setCursor(11, 0);
+  lcd.print(buffer);
 
-  sprintf(buffer, "%02d", tm.Second);
+  dtostrf(bme280.readHumidity(), 4, 1, buffer);
+  lcd.setCursor(11, 1);
+  lcd.print(buffer);
+}
+
+void updateRTC() {
+  char buffer[5];
+  int value;
+
+  value = second();
+  sprintf(buffer, "%02d", value);
   lcd.setCursor(8, 0);
   lcd.print(buffer);
 
-  if (tm.Minute != lastMinute) {
-    sprintf(buffer, "%02d", tm.Minute);
+  value = minute();
+  if (value != lastMinute) {
+    sprintf(buffer, "%02d", value);
     lcd.setCursor(5, 0);
     lcd.print(buffer);
-    lastMinute = tm.Minute;
+    lastMinute = value;
   }
 
-  if (tm.Hour != lastHour) {
-    sprintf(buffer, "%02d", tm.Hour);
+  value = hour();
+  if (value != lastHour) {
+    sprintf(buffer, "%02d", value);
     lcd.setCursor(2, 0);
     lcd.print(buffer);
-    lastHour = tm.Hour;
+    lastHour = value;
   }
 
-  if (tm.Day != lastDay) {
-    sprintf(buffer, "%02d", tm.Day);
+  value = day();
+  if (value != lastDay) {
+    sprintf(buffer, "%02d", value);
     lcd.setCursor(8, 1);
     lcd.print(buffer);
-    lastDay = tm.Day;
+    lastDay = value;
   }
 
-  if (tm.Month != lastMonth) {
-    sprintf(buffer, "%02d", tm.Month);
+  value = month();
+  if (value != lastMonth) {
+    sprintf(buffer, "%02d", value);
     lcd.setCursor(5, 1);
     lcd.print(buffer);
-    lastMonth = tm.Month;
+    lastMonth = value;
   }
 
-  if (tm.Year != lastYear) {
-    sprintf(buffer, "%04d", tm.Year + 1970);
+  value = year();
+  if (value != lastYear) {
+    sprintf(buffer, "%04d", value);
     lcd.setCursor(0, 1);
     lcd.print(buffer);
-    lastYear = tm.Year;
+    lastYear = value;
   }
 }
